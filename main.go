@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -14,15 +15,17 @@ import (
 	smbdcerpc "github.com/jfjallid/go-smb/smb/dcerpc"
 	"github.com/jfjallid/go-smb/smb/dcerpc/msrrp"
 	"github.com/jfjallid/go-smb/spnego"
+	"github.com/jfjallid/golog"
 )
 
 var sccmlocation = `SOFTWARE\Microsoft\SMS`
 
 func main() {
+	golog.Get("github.com/jfjallid/go-smb/smb/dcerpc/msrrp").SetLogLevel(golog.LevelCritical)
 	err := Enumerate()
 	if err != nil {
 		fmt.Println("[-] Error: " + err.Error())
-		return
+		os.Exit(1)
 	}
 }
 
@@ -91,13 +94,12 @@ func Enumerate() error {
 	}
 	err = EnumerateSiteDB(reg)
 	if err != nil {
-		return errors.New("[-] Could Not Locate Site DB")
+		return fmt.Errorf("enumerating site database: %w", err)
 	}
 	return nil
 }
 
 func EnumerateSiteDB(reg *msrrp.RPCCon) error {
-
 	hKey, err := reg.OpenBaseKey(msrrp.HKEYLocalMachine)
 	if err != nil {
 		return err
@@ -105,10 +107,18 @@ func EnumerateSiteDB(reg *msrrp.RPCCon) error {
 	subkey := sccmlocation + `\COMPONENTS\SMS_SITE_COMPONENT_MANAGER\Multisite Component Servers`
 	listedSubKeys, err := reg.GetSubKeyNames(hKey, subkey)
 	if err != nil {
-		return err
+		if errors.Is(err, msrrp.ReturnCodeMap[msrrp.ErrorFileNotFound]) {
+			fmt.Println("[i] Site database listing key absent on this host")
+			return nil
+		}
+		if errors.Is(err, msrrp.ReturnCodeMap[msrrp.ErrorAccessDenied]) {
+			fmt.Println("[!] Site database listing key access denied")
+			return nil
+		}
+		return fmt.Errorf("enumerate site database path: %w", err)
 	}
 	if len(listedSubKeys) == 1 {
-		fmt.Println("[+] Site Database Found: " + listedSubKeys[0])
+		fmt.Println("[+] Site database server listed: " + listedSubKeys[0])
 	}
 	if len(listedSubKeys) == 0 {
 		fmt.Println("[+] Site Database is Local to the Primary Site Server")
@@ -127,6 +137,17 @@ func EnumeratePSSRoles(reg *msrrp.RPCCon) error {
 		return err
 	}
 	listedSubKeys, err := reg.GetSubKeyNames(hKey, sccmlocation)
+	if errors.Is(err, msrrp.ReturnCodeMap[msrrp.ErrorAccessDenied]) {
+		fmt.Println("[i] SCCM subkey listing denied; reading settings directly")
+		if dpErr := EnumerateDP(reg); dpErr != nil {
+			if errors.Is(dpErr, msrrp.ReturnCodeMap[msrrp.ErrorAccessDenied]) ||
+				errors.Is(dpErr, msrrp.ReturnCodeMap[msrrp.ErrorFileNotFound]) {
+				return fmt.Errorf("SCCM subkey listing denied and settings key unavailable: %w", err)
+			}
+			return fmt.Errorf("query settings after SCCM subkey listing denied: %w", dpErr)
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}
