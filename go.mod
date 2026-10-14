@@ -2,7 +2,7 @@ module pssrecon
 
 go 1.20
 
-require github.com/jfjallid/go-smb v0.5.5
+require github.com/jfjallid/go-smb v0.6.2
 
 require (
 	github.com/jfjallid/gofork v1.7.6 // indirect
